@@ -132,3 +132,151 @@ async def ingest_document(request: IngestRequest):
         ids=[doc_id]
     )
     return {"status": "success", "doc_id": doc_id}
+
+
+# ──────────────────────────────────────────────────────────────
+# Module 1: The Sparring Zone  (Real AI Debate + Evaluation)
+# Reference: csv610/AIDebator, ucl-dark/llm_debate patterns
+# ──────────────────────────────────────────────────────────────
+
+class MessageItem(BaseModel):
+    role: str          # "user" | "assistant"
+    content: str
+
+class DebateRequest(BaseModel):
+    messages: List[MessageItem]       # full conversation history so far
+    userMessage: str                  # the new message from the user
+
+class EvaluateRequest(BaseModel):
+    messages: List[MessageItem]       # full 5-turn conversation
+
+
+DEBATE_SYSTEM_PROMPT = """คุณคือ AI คู่โต้วาทีในแพลตฟอร์ม "Civic Gym" ภาษาไทย
+บทบาทของคุณ:
+- ท้าทายข้อโต้แย้งของผู้ใช้อย่างมีเหตุผล
+- ชี้ให้เห็นจุดอ่อนในตรรกะ ขาดหลักฐาน หรือความคลุมเครือ
+- ใช้วิธีโสกราตีสในการตั้งคำถามกลับ
+- ตอบเป็นภาษาไทยเสมอ กระชับ ไม่เกิน 3 ประโยค
+- ห้ามใช้ภาษาหยาบคายหรือดูถูก
+- ถ้าผู้ใช้พิมพ์คำที่ไม่เกี่ยวข้อง (เช่น "Hello" ซ้ำๆ) ให้ตอบว่าไม่เข้าใจข้อโต้แย้งและขอให้เสนอประเด็นที่ชัดเจน"""
+
+EVALUATE_SYSTEM_PROMPT = """คุณคือผู้ตัดสินการโต้วาที AI ที่เป็นกลาง
+วิเคราะห์ประสิทธิภาพของผู้ใช้ (role: "user") จากบทสนทนาทั้งหมด
+ให้คะแนน 0-100 ใน 5 ด้าน:
+
+1. Logic (ตรรกะ): ข้อโต้แย้งมีเหตุผลหรือไม่? มีความผิดพลาดทางตรรกะหรือไม่?
+2. Evidence (หลักฐาน): มีการอ้างอิงข้อมูล ตัวเลข หรือตัวอย่างที่เป็นรูปธรรมหรือไม่?
+3. Persuasion (การโน้มน้าว): วาทศิลป์มีพลังแค่ไหน? สามารถโน้มน้าวผู้ฟังได้หรือไม่?
+4. Openness (การเปิดรับ): ผู้ใช้ยอมรับจุดอ่อนของตัวเองหรือพิจารณามุมมองตรงข้ามหรือไม่?
+5. Clarity (ความชัดเจน): ข้อโต้แย้งชัดเจน เข้าใจง่ายหรือไม่?
+
+สำคัญ: ถ้าผู้ใช้พิมพ์คำซ้ำๆ ที่ไม่มีสาระ (เช่น "Hello" หรือ "สวัสดี" ซ้ำๆ) ให้คะแนนต่ำมาก (0-10) ในทุกด้าน
+
+คืนค่าเป็น JSON เท่านั้น ในรูปแบบนี้:
+{"logic": 0, "evidence": 0, "persuasion": 0, "openness": 0, "clarity": 0, "feedback": "ข้อเสนอแนะภาษาไทยสั้นๆ"}"""
+
+
+@app.post("/api/module1/debate")
+async def debate_turn(request: DebateRequest):
+    """
+    Module 1 Sparring: Send the conversation + new user message to DeepSeek.
+    Returns a contextual Thai counter-argument.
+    """
+    # Build the messages array for DeepSeek
+    deepseek_messages = [
+        {"role": "system", "content": DEBATE_SYSTEM_PROMPT}
+    ]
+
+    # Add conversation history
+    for msg in request.messages:
+        deepseek_messages.append({"role": msg.role, "content": msg.content})
+
+    # Add the new user message
+    deepseek_messages.append({"role": "user", "content": request.userMessage})
+
+    headers = {
+        "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+        "Content-Type": "application/json"
+    }
+
+    payload = {
+        "model": "deepseek-chat",
+        "messages": deepseek_messages,
+        "temperature": 0.7,
+        "max_tokens": 300
+    }
+
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.post(DEEPSEEK_API_URL, json=payload, headers=headers, timeout=60.0)
+            response.raise_for_status()
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"DeepSeek API Error: {str(e)}")
+
+    data = response.json()
+    raw_content = data['choices'][0]['message']['content']
+    ai_response = strip_think_tags(raw_content)
+
+    return {"response": ai_response}
+
+
+@app.post("/api/module1/evaluate")
+async def evaluate_debate(request: EvaluateRequest):
+    """
+    Module 1 Evaluation: After 5 turns, send the full conversation
+    to DeepSeek for structured scoring across 5 axes.
+    Returns JSON scores (0-100) for radar chart display.
+    """
+    # Build conversation transcript for the evaluator
+    transcript = ""
+    for msg in request.messages:
+        label = "ผู้ใช้" if msg.role == "user" else "AI"
+        transcript += f"[{label}]: {msg.content}\n"
+
+    deepseek_messages = [
+        {"role": "system", "content": EVALUATE_SYSTEM_PROMPT},
+        {"role": "user", "content": f"บทสนทนาที่ต้องประเมิน:\n\n{transcript}\n\nกรุณาประเมินและคืนค่า JSON"}
+    ]
+
+    headers = {
+        "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+        "Content-Type": "application/json"
+    }
+
+    payload = {
+        "model": "deepseek-chat",
+        "messages": deepseek_messages,
+        "temperature": 0.3,
+        "max_tokens": 500
+    }
+
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.post(DEEPSEEK_API_URL, json=payload, headers=headers, timeout=60.0)
+            response.raise_for_status()
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"DeepSeek Evaluation Error: {str(e)}")
+
+    data = response.json()
+    raw_content = data['choices'][0]['message']['content']
+    json_str = strip_think_tags(raw_content)
+
+    # Cleanup markdown JSON blocks
+    if json_str.startswith("```json"):
+        json_str = json_str[7:-3].strip()
+    elif json_str.startswith("```"):
+        json_str = json_str[3:-3].strip()
+
+    try:
+        scores = json.loads(json_str)
+        return {"scores": scores}
+    except json.JSONDecodeError:
+        # Fallback: return zeros if parsing fails
+        return {
+            "scores": {
+                "logic": 0, "evidence": 0, "persuasion": 0,
+                "openness": 0, "clarity": 0,
+                "feedback": "ไม่สามารถประเมินได้ กรุณาลองใหม่"
+            },
+            "raw_output": json_str
+        }
