@@ -2,6 +2,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 import chromadb
+from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
 from fastapi.middleware.cors import CORSMiddleware
 import httpx
 import json
@@ -24,7 +25,14 @@ app.add_middleware(
 CHROMA_DB_DIR = os.path.join(os.path.dirname(__file__), '..', '..', 'chroma_data')
 os.makedirs(CHROMA_DB_DIR, exist_ok=True)
 chroma_client = chromadb.PersistentClient(path=CHROMA_DB_DIR)
-collection = chroma_client.get_or_create_collection(name="civic_documents")
+
+# Explicitly use a zero-cost, Thai-compatible multilingual embedding model
+hf_embedding_function = SentenceTransformerEmbeddingFunction(model_name="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
+
+collection = chroma_client.get_or_create_collection(
+    name="civic_documents", 
+    embedding_function=hf_embedding_function
+)
 
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "sk-f90c54a9e2d34a999ec676b3befbe7d7")
 DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions"

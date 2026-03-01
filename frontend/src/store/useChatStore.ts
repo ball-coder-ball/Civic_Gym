@@ -53,7 +53,14 @@ export const useChatStore = create<ChatState>()((set, get) => ({
         try {
             // Send a single batch POST request to backend to evaluate and save
             // This minimizes database write costs and latency by bypassing single-turn DB saves
-            const response = await fetch('/api/evaluate-session', {
+
+            // In next.js we let the Rewrites handle it if no absolute URL is used, otherwise we hit relative.
+            const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL ? process.env.NEXT_PUBLIC_BACKEND_URL : '';
+
+            // In a production Vercel environment without a backend, this will fail gracefully or point to external.
+            const apiEndpoint = `${backendUrl}/api/evaluate-session`;
+
+            const response = await fetch(apiEndpoint, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
