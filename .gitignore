@@ -1,0 +1,21 @@
+node_modules/
+.next/
+dist/
+build/
+.env*
+.DS_Store
+*.log
+
+# Python
+__pycache__/
+*.pyc
+venv/
+env/
+.venv/
+.pytest_cache/
+
+# ChromaDB Data
+chroma_data/
+
+# PDF Data
+data/pdfs/
